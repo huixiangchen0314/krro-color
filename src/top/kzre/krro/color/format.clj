@@ -4,7 +4,7 @@
             [top.kzre.krro.color.util :as util]))
 
 (defn- to-byte [c]
-  (int (* 255 (util/clamp 0.0 1.0 c))))
+  (int (Math/round (* 255 (util/clamp 0.0 1.0 c)))))
 
 (defn hex
   "输出 HEX 字符串，如 \"#ff0066\"。"
