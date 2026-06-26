@@ -5,11 +5,17 @@
    [top.kzre.krro.color.adaptation :as adapt]
    [top.kzre.krro.color.converter :as conv]
    [top.kzre.krro.color.oklab :as oklab]
+   [top.kzre.krro.color.profiles :as profiles]
    [top.kzre.krro.color.util :as util]))
 
-;; ── 辅助 gamma 函数 ─────────────────────────────────
-(defn- linear-rgb->srgb [c] (mapv util/linear->srgb c))
-(defn- srgb->linear-rgb [c] (mapv util/srgb->linear c))
+;; ── 辅助 gamma 函数（直接使用 profiles）─────────────────
+(defn- linear-rgb->srgb [c]
+  (let [{:keys [encode]} (:gamma (profiles/get-space :srgb))]
+    (mapv encode c)))
+
+(defn- srgb->linear-rgb [c]
+  (let [{:keys [decode]} (:gamma (profiles/get-space :srgb))]
+    (mapv decode c)))
 
 ;; ── 相对色度意图 ───────────────────────────────────
 (defn relative-colorimetric
@@ -28,7 +34,7 @@
   [xyz-color src-white target-white xyz->target-rgb]
   (let [adapted (adapt/chromatic-adapt xyz-color src-white target-white)
         srgb (conv/xyz->rgb adapted)
-        linear-rgb (mapv util/srgb->linear srgb)
+        linear-rgb (srgb->linear-rgb srgb)
         oklab-color (oklab/linear-rgb->oklab linear-rgb)
         [L a b] oklab-color]
     (if (or (> L 1.0) (< L 0.0))
@@ -43,7 +49,6 @@
               (if (> next-factor 0.01)
                 (recur next-factor)
                 (relative-colorimetric xyz-color src-white target-white xyz->target-rgb)))))))))
-
 ;; ── 空间参数辅助函数 ─────────────────────────────────
 (defn- space-info [space]
   (case space

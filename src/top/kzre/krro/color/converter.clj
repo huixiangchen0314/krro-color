@@ -131,9 +131,12 @@
 
 ;; ── RGB ↔ OKLab / OKLCH ──────────────────────────────
 (defn rgb->oklab [c]
-  (oklab/linear-rgb->oklab (mapv util/srgb->linear c)))
+  (let [{:keys [decode]} (:gamma (profiles/get-space :srgb))]
+    (oklab/linear-rgb->oklab (mapv decode c))))
+
 (defn oklab->rgb [c]
-  (mapv util/linear->srgb (oklab/oklab->linear-rgb c)))
+  (let [{:keys [encode]} (:gamma (profiles/get-space :srgb))]
+    (mapv encode (oklab/oklab->linear-rgb c))))
 (defn rgb->oklch [c] (-> c rgb->oklab oklch/oklab->oklch))
 (defn oklch->rgb [c] (-> c oklch/oklch->oklab oklab->rgb))
 
