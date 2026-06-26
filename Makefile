@@ -1,4 +1,7 @@
-.PHONY: test jar install deploy clean
+.PHONY: clean test jar uberjar install repl
+
+clean:
+	clojure -T:build clean
 
 test:
 	clojure -M:test
@@ -6,11 +9,11 @@ test:
 jar:
 	clojure -T:build jar
 
-install:
-	clojure -T:build install
+uberjar:
+	clojure -T:build uberjar
 
-deploy:
-	clojure -T:build deploy
+install: jar
+	mvn install:install-file -Dfile=target/krro-color-0.1.0.jar -DpomFile=pom.xml
 
-clean:
-	rm -rf target
+repl:
+	clojure -M:repl

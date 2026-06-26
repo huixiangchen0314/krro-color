@@ -1,10 +1,12 @@
 (ns build
-    (:require [clojure.tools.build.api :as b]))
+      (:require [clojure.tools.build.api :as b]))
 
-(def lib 'krro-color)
+(def lib 'top.kzre/krro-color)
 (def version "0.1.0")
 (def class-dir "target/classes")
 (def basis (b/create-basis {:project "deps.edn"}))
+(def jar-file "target/krro-color-0.1.0.jar")            ;; 硬编码，与 Makefile 一致
+(def uber-file "target/krro-color-0.1.0-standalone.jar")
 
 (defn clean [_]
       (b/delete {:path "target"}))
@@ -15,30 +17,24 @@
                     :lib lib
                     :version version
                     :basis basis
-                    :src-dirs ["src"]})
-      (b/copy-dir {:src-dirs ["src"] :target-dir class-dir})
+                    :src-dirs ["src"]
+                    :scm {:url "https://github.com/topkzre/krro-color"
+                          :connection "scm:git:git://github.com/topkzre/krro-color.git"
+                          :developerConnection "scm:git:ssh://git@github.com:topkzre/krro-color.git"}})
+      (b/copy-dir {:src-dirs ["src" "resources"] :target-dir class-dir})
       (b/jar {:class-dir class-dir
-              :jar-file (format "target/%s-%s.jar" (name lib) version)})
-      (println "Jar created."))
+              :jar-file jar-file})
+      (println "Jar created:" jar-file))
 
-(defn install [_]
-      (jar nil)
-      (b/install {:basis basis
-                  :lib lib
-                  :version version
-                  :class-dir class-dir})
-      (println "Installed to local Maven repository."))
-
-(defn deploy [_]
-      (jar nil)
-      (b/deploy {:basis basis
-                 :lib lib
-                 :version version
-                 :class-dir class-dir
-                 :repository {:url "https://clojars.org/repo"
-                              :username (System/getenv "CLOJARS_USERNAME")
-                              :password (System/getenv "CLOJARS_PASSWORD")}})
-      (println "Deployed to Clojars."))
+(defn uberjar [_]
+      (clean nil)
+      (b/compile-clj {:basis basis
+                      :src-dirs ["src"]
+                      :class-dir class-dir})
+      (b/uber {:class-dir class-dir
+               :uber-file uber-file
+               :basis basis})
+      (println "Uberjar created:" uber-file))
 
 (defn test-all [_]
       (b/process {:command-args ["clojure" "-M:test"]}))
