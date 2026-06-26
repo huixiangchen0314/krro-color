@@ -1,45 +1,28 @@
 (ns top.kzre.krro.color.blend
-  "混合模式实现，参考 PS 标准公式。"
+  "混合模式实现，参考 PS 标准公式。包含调度函数 blend 以及带 alpha 的合成。"
   (:require [top.kzre.krro.color.rgb :as rgb]
-            [top.kzre.krro.color.util :as util]))
+            [top.kzre.krro.color.util :as util]
+            [top.kzre.krro.color.composite :as comp]))
 
-(defn normal
-  "正常混合（上覆盖下）。"
-  [backdrop source]
-  source)
+(defn normal [backdrop source] source)
 
-(defn dissolve
-  "溶解模式（需 alpha 支持，此处简化返回 source）。"
-  [backdrop source]
-  source) ;; 完整实现需要透明度随机
+(defn dissolve [backdrop source] source) ;; 简化
 
-(defn multiply
-  "正片叠底。"
-  [backdrop source]
-  (mapv * backdrop source))
+(defn multiply [backdrop source] (mapv * backdrop source))
 
-(defn screen
-  "滤色。"
-  [backdrop source]
+(defn screen [backdrop source]
   (mapv #(- 1 (* (- 1 %1) (- 1 %2))) backdrop source))
 
-(defn overlay
-  "叠加。"
-  [backdrop source]
+(defn overlay [backdrop source]
   (mapv (fn [b s]
           (if (<= b 0.5)
             (* 2 b s)
             (- 1 (* 2 (- 1 b) (- 1 s)))))
         backdrop source))
 
-(defn hard-light
-  "强光。"
-  [backdrop source]
-  (overlay source backdrop))
+(defn hard-light [backdrop source] (overlay source backdrop))
 
-(defn soft-light
-  "柔光。"
-  [backdrop source]
+(defn soft-light [backdrop source]
   (mapv (fn [b s]
           (if (<= s 0.5)
             (- b (* b (- 1 (* 2 s)) (- 1 b)))
@@ -49,110 +32,107 @@
               (+ b (* (- d b) (- 1 (* 2 s)))))))
         backdrop source))
 
-(defn color-dodge
-  "颜色减淡。"
-  [backdrop source]
-  (mapv (fn [b s]
-          (if (zero? s)
-            b
-            (util/clamp 0.0 1.0 (/ b (- 1 s)))))
-        backdrop source))
+(defn darken [backdrop source] (mapv min backdrop source))
+(defn lighten [backdrop source] (mapv max backdrop source))
 
-(defn color-burn
-  "颜色加深。"
-  [backdrop source]
-  (mapv (fn [b s]
-          (if (= s 1.0)
-            1.0
-            (util/clamp 0.0 1.0 (- 1 (/ (- 1 b) s)))))
-        backdrop source))
-
-(defn darken
-  "变暗。"
-  [backdrop source]
-  (mapv min backdrop source))
-
-(defn lighten
-  "变亮。"
-  [backdrop source]
-  (mapv max backdrop source))
-
-(defn difference
-  "差值。"
-  [backdrop source]
+(defn difference [backdrop source]
   (mapv (fn [b s] (Math/abs (- b s))) backdrop source))
 
-(defn exclusion
-  "排除。"
-  [backdrop source]
+(defn exclusion [backdrop source]
   (mapv #(+ %1 %2 (- (* 2 %1 %2))) backdrop source))
 
-
-
-(defn linear-light
-  "线性光： = linear-dodge + linear-burn（依 source 明暗）。"
-  [backdrop source]
+(defn color-dodge [backdrop source]
   (mapv (fn [b s]
-          (if (<= s 0.5)
-            (color-burn b (* 2 s))
-            (color-dodge b (* 2 (- s 0.5)))))
+          (if (>= s 1.0)
+            1.0
+            (util/clamp 0.0 1.0 (/ b (- 1.0 s)))))
         backdrop source))
 
-(defn vivid-light
-  "亮光： = color-dodge + color-burn（依 source 明暗）。"
-  [backdrop source]
+(defn color-burn [backdrop source]
   (mapv (fn [b s]
-          (if (<= s 0.5)
-            (color-burn b (* 2 s))
-            (color-dodge b (* 2 (- s 0.5)))))
+          (if (<= s 0.0)
+            b
+            (util/clamp 0.0 1.0 (- 1.0 (/ (- 1.0 b) s)))))
         backdrop source))
 
-(defn pin-light
-  "点光： = darken + lighten 组合。"
-  [backdrop source]
+;; 组合模式：完全使用逐通道公式，不再调用其他混合函数
+
+(defn linear-light [backdrop source]
   (mapv (fn [b s]
           (if (<= s 0.5)
-            (darken b (* 2 s))
-            (lighten b (* 2 (- s 0.5)))))
+            (util/clamp 0.0 1.0 (+ b (* 2.0 s) -1.0))          ;; linear-burn
+            (util/clamp 0.0 1.0 (+ b (* 2.0 (- s 0.5))))))     ;; linear-dodge
         backdrop source))
 
-(defn hard-mix
-  "实色混合：硬阈值混合，结果分量要么 0 要么 1。"
-  [backdrop source]
+(defn vivid-light [backdrop source]
+  (mapv (fn [b s]
+          (if (<= s 0.5)
+            (let [s2 (* 2.0 s)]
+              (if (<= s2 0.0)
+                b
+                (util/clamp 0.0 1.0 (- 1.0 (/ (- 1.0 b) s2)))))   ;; color-burn
+            (let [s2 (* 2.0 (- s 0.5))]
+              (if (>= s2 1.0)
+                1.0
+                (util/clamp 0.0 1.0 (/ b (- 1.0 s2)))))))          ;; color-dodge
+        backdrop source))
+
+(defn pin-light [backdrop source]
+  (mapv (fn [b s]
+          (if (<= s 0.5)
+            (min b (* 2.0 s))                   ;; darken (逐通道)
+            (max b (* 2.0 (- s 0.5)))))         ;; lighten (逐通道)
+        backdrop source))
+
+(defn hard-mix [backdrop source]
   (mapv (fn [b s]
           (if (<= (+ b s) 1.0) 0.0 1.0))
         backdrop source))
 
-(defn subtract
-  "减去：从基色减去源色。"
-  [backdrop source]
+(defn subtract [backdrop source]
   (mapv #(util/clamp 0.0 1.0 (- %1 %2)) backdrop source))
 
-(defn divide
-  "划分：基色除以源色（源色接近零时结果趋于 1）。"
-  [backdrop source]
+(defn divide [backdrop source]
   (mapv (fn [b s]
           (if (zero? s)
             1.0
             (util/clamp 0.0 1.0 (/ b s))))
         backdrop source))
 
-
-;; 线性加深
-(defn linear-burn
-  [backdrop source]
+(defn linear-burn [backdrop source]
   (mapv #(util/clamp 0.0 1.0 (+ %1 %2 -1.0)) backdrop source))
 
-;; 线性减淡
-(defn linear-dodge
-  [backdrop source]
+(defn linear-dodge [backdrop source]
   (mapv #(util/clamp 0.0 1.0 (+ %1 %2)) backdrop source))
 
-;; 亮光 (Vivid Light) — 已存在但公式可能不标准，我们重新实现标准版本：
-(defn vivid-light
-  [backdrop source]
-  (mapv (fn [b s]
-          (if (<= s 0.5)
-            (color-burn b (* 2.0 s))
-            (color-dodge b (* 2.0 (- s 0.5)))))
-        backdrop source))
+;; ── 混合模式调度 ─────────────────────────────────────────
+(defn blend
+  "根据关键字 mode 应用混合模式。"
+  [backdrop source mode]
+  (case mode
+    :normal       (normal backdrop source)
+    :multiply     (multiply backdrop source)
+    :screen       (screen backdrop source)
+    :overlay      (overlay backdrop source)
+    :hard-light   (hard-light backdrop source)
+    :soft-light   (soft-light backdrop source)
+    :color-dodge  (color-dodge backdrop source)
+    :color-burn   (color-burn backdrop source)
+    :darken       (darken backdrop source)
+    :lighten      (lighten backdrop source)
+    :difference   (difference backdrop source)
+    :exclusion    (exclusion backdrop source)
+    :linear-light (linear-light backdrop source)
+    :vivid-light  (vivid-light backdrop source)
+    :pin-light    (pin-light backdrop source)
+    :hard-mix     (hard-mix backdrop source)
+    :subtract     (subtract backdrop source)
+    :divide       (divide backdrop source)
+    (throw (IllegalArgumentException. (str "Unknown blend mode: " mode)))))
+
+;; ── 带 alpha 的混合 ──────────────────────────────────────
+(defn blend-with-alpha
+  [backdrop source mode]
+  (let [blended-rgb (blend (subvec backdrop 0 3) (subvec source 0 3) mode)
+        blended-rgba (conj (vec blended-rgb) (rgb/alpha source))]
+    (comp/over backdrop blended-rgba)))
