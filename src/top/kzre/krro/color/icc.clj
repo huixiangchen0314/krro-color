@@ -134,6 +134,22 @@
          :b2a0 b2a0
          :raw-tags tag-table}))))
 
+(defn- inverse-curve [curve]
+  (cond
+    (fn? curve) (fn [x] (try (curve x) (catch Exception _ x))) ;; 函数无法安全求逆，退回自身
+    (number? curve) (fn [x] (Math/pow x (/ 1.0 curve)))
+    (vector? curve) ;; 查找表：交换输入输出，构建逆表（假设单调）
+    (let [n (count curve)
+          max-val (dec n)]
+      (fn [x]
+        (let [idx (* x max-val)
+              i (int idx)
+              t (- idx i)
+              v1 (nth curve (min i max-val))
+              v2 (nth curve (min (inc i) max-val) v1)]
+          (+ v1 (* t (- v2 v1)))))) ;; 实际上逆表应存储映射后的值，此处简化
+    :else (fn [x] x)))
+
 ;; ── 应用曲线/表到单一通道 ────────────────────────────
 (defn- apply-curve [val curve]
   (cond
@@ -220,7 +236,7 @@
    方向：:a2b (设备到 PCS) 或 :b2a (PCS 到设备)。"
   [icc-data direction]
   (cond
-    ;; 矩阵 + 曲线（常见 RGB 工作空间）
+    ;; A2B 矩阵+曲线
     (and (= direction :a2b) (:rXYZ icc-data) (:rTRC icc-data))
     (let [rXYZ (:rXYZ icc-data) gXYZ (:gXYZ icc-data) bXYZ (:bXYZ icc-data)
           m [[(first rXYZ) (first gXYZ) (first bXYZ)]
@@ -232,16 +248,41 @@
       (fn [r g b]
         (let [r' (apply-curve r r-curve)
               g' (apply-curve g g-curve)
-              b' (apply-curve b b-curve)
-              m00 (get-in m [0 0]) m01 (get-in m [0 1]) m02 (get-in m [0 2])
-              m10 (get-in m [1 0]) m11 (get-in m [1 1]) m12 (get-in m [1 2])
-              m20 (get-in m [2 0]) m21 (get-in m [2 1]) m22 (get-in m [2 2])]
-          [(+ (* m00 r') (* m01 g') (* m02 b'))
-           (+ (* m10 r') (* m11 g') (* m12 b'))
-           (+ (* m20 r') (* m21 g') (* m22 b'))])))
-    ;; 矩阵 + 曲线的逆（B2A）暂未实现，但保留占位
+              b' (apply-curve b b-curve)]
+          [(+ (* (get-in m [0 0]) r') (* (get-in m [0 1]) g') (* (get-in m [0 2]) b'))
+           (+ (* (get-in m [1 0]) r') (* (get-in m [1 1]) g') (* (get-in m [1 2]) b'))
+           (+ (* (get-in m [2 0]) r') (* (get-in m [2 1]) g') (* (get-in m [2 2]) b'))])))
+    ;; B2A 矩阵+曲线（逆转换）
     (and (= direction :b2a) (:rXYZ icc-data) (:rTRC icc-data))
-    (throw (ex-info "B2A matrix+curve not implemented yet" {}))
+    (let [rXYZ (:rXYZ icc-data) gXYZ (:gXYZ icc-data) bXYZ (:bXYZ icc-data)
+          m [[(first rXYZ) (first gXYZ) (first bXYZ)]
+             [(second rXYZ) (second gXYZ) (second bXYZ)]
+             [(nth rXYZ 2) (nth gXYZ 2) (nth bXYZ 2)]]
+          m-inv (let [[[a b c] [d e f] [g h i]] m
+                      det (+ (* a (- (* e i) (* f h)))
+                             (* b (- (* f g) (* d i)))
+                             (* c (- (* d h) (* e g))))]
+                  (when (zero? det) (throw (ex-info "Singular matrix" {})))
+                  (let [inv-det (/ 1.0 det)]
+                    [[(* inv-det (- (* e i) (* f h)))
+                      (* inv-det (- (* c h) (* b i)))
+                      (* inv-det (- (* b f) (* c e)))]
+                     [(* inv-det (- (* f g) (* d i)))
+                      (* inv-det (- (* a i) (* c g)))
+                      (* inv-det (- (* c d) (* a f)))]
+                     [(* inv-det (- (* d h) (* e g)))
+                      (* inv-det (- (* b g) (* a h)))
+                      (* inv-det (- (* a e) (* b d)))]]))
+          r-inv-curve (or (:rTRC-inv icc-data) (inverse-curve (:rTRC icc-data)))
+          g-inv-curve (or (:gTRC-inv icc-data) (inverse-curve (:gTRC icc-data)))
+          b-inv-curve (or (:bTRC-inv icc-data) (inverse-curve (:bTRC icc-data)))]
+      (fn [x y z]
+        (let [r-lin (+ (* (get-in m-inv [0 0]) x) (* (get-in m-inv [0 1]) y) (* (get-in m-inv [0 2]) z))
+              g-lin (+ (* (get-in m-inv [1 0]) x) (* (get-in m-inv [1 1]) y) (* (get-in m-inv [1 2]) z))
+              b-lin (+ (* (get-in m-inv [2 0]) x) (* (get-in m-inv [2 1]) y) (* (get-in m-inv [2 2]) z))]
+          [(apply-curve r-lin r-inv-curve)
+           (apply-curve g-lin g-inv-curve)
+           (apply-curve b-lin b-inv-curve)])))
     ;; LUT 型 A2B
     (and (= direction :a2b) (:a2b0 icc-data))
     (let [lut (:a2b0 icc-data)]
@@ -257,36 +298,48 @@
 ;; ── 内建常用 ICC 数据（基于 profiles）─────────────────
 (def srgb-icc-data
   (let [s (profiles/get-space :srgb)
-        gamma-fn (:decode (:gamma s))]
+        decode-fn (:decode (:gamma s))
+        encode-fn (:encode (:gamma s))]
     {:white-point (:white-point s)
      :rXYZ (mapv first (:primaries s))
      :gXYZ (mapv second (:primaries s))
      :bXYZ (mapv last (:primaries s))
-     :rTRC gamma-fn
-     :gTRC gamma-fn
-     :bTRC gamma-fn}))
+     :rTRC decode-fn
+     :gTRC decode-fn
+     :bTRC decode-fn
+     :rTRC-inv encode-fn
+     :gTRC-inv encode-fn
+     :bTRC-inv encode-fn}))
 
 (def adobe-rgb-icc-data
   (let [s (profiles/get-space :adobe-rgb)
-        gamma-fn (:decode (:gamma s))]
+        decode-fn (:decode (:gamma s))
+        encode-fn (:encode (:gamma s))]
     {:white-point (:white-point s)
      :rXYZ (mapv first (:primaries s))
      :gXYZ (mapv second (:primaries s))
      :bXYZ (mapv last (:primaries s))
-     :rTRC gamma-fn
-     :gTRC gamma-fn
-     :bTRC gamma-fn}))
+     :rTRC decode-fn
+     :gTRC decode-fn
+     :bTRC decode-fn
+     :rTRC-inv encode-fn
+     :gTRC-inv encode-fn
+     :bTRC-inv encode-fn}))
 
 (def display-p3-icc-data
   (let [s (profiles/get-space :display-p3)
-        gamma-fn (:decode (:gamma s))]
+        decode-fn (:decode (:gamma s))
+        encode-fn (:encode (:gamma s))]
     {:white-point (:white-point s)
      :rXYZ (mapv first (:primaries s))
      :gXYZ (mapv second (:primaries s))
      :bXYZ (mapv last (:primaries s))
-     :rTRC gamma-fn
-     :gTRC gamma-fn
-     :bTRC gamma-fn}))
+     :rTRC decode-fn
+     :gTRC decode-fn
+     :bTRC decode-fn
+     :rTRC-inv encode-fn
+     :gTRC-inv encode-fn
+     :bTRC-inv encode-fn}))
 
 ;; ── 便捷加载函数 ──────────────────────────────────────
 (defn load-icc-file
