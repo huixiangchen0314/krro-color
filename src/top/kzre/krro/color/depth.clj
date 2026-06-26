@@ -75,3 +75,11 @@
                                         (bit-shift-left exp 23)
                                         (bit-shift-left m 13)))]
         (Float/intBitsToFloat bits)))))
+
+
+(defn float->unorm16-batch [^doubles src]
+  (let [n (alength src)
+        dst (short-array n)]
+    (dotimes [i n]
+      (aset dst i (short (float->unorm16 (aget src i)))))
+    dst))

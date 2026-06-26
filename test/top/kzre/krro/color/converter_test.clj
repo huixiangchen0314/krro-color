@@ -97,3 +97,14 @@
         pro (-> rgb conv/rgb->xyz conv/xyz->prophoto)
         back (-> pro conv/prophoto->xyz conv/xyz->rgb)]
     (is (every? true? (map #(< (Math/abs (- %1 %2)) 1e-2) rgb back)))))
+
+(deftest gray-xyz-roundtrip
+  (let [y 0.7
+        xyz (conv/gray->xyz y)
+        back (conv/xyz->gray xyz)]
+    (is (< (Math/abs (- y back)) 1e-10))))
+
+(deftest gray-to-xyz-values
+  (let [xyz (conv/gray->xyz 1.0)]
+    ;; 白点应等于 D65 白点
+    (is (every? true? (map #(< (Math/abs (- %1 %2)) 1e-5) xyz [0.95047 1.0 1.08883])))))

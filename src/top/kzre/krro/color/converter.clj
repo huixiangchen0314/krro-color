@@ -146,7 +146,18 @@
 (defn xyz->lab [c] (lab/xyz->lab c))
 (defn lab->xyz [c] (lab/lab->xyz c))
 
+(defn gray->xyz
+  "将线性灰度值 Y (0..1) 转换为 XYZ (D65)。"
+  [y]
+  (let [wp (:white-point (profiles/get-space :srgb))]
+    [(* (/ (first wp) (second wp)) y)
+     y
+     (* (/ (nth wp 2) (second wp)) y)]))
 
+(defn xyz->gray
+  "从 XYZ (D65) 提取相对亮度 Y。"
+  [[_ y _]]
+  y)
 
 
 ;; ── 颜色距离便捷函数 ─────────────────────────────────

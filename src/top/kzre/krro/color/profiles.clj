@@ -67,6 +67,11 @@
     :gamma {:decode (fn [x] (if (<= x 0.04045) (/ x 12.92) (Math/pow (/ (+ x 0.055) 1.055) 2.4)))  ;; 实际上 BT.2020 使用与 sRGB 相同的 gamma？ 否，BT.2020 使用与 sRGB 不同的传输函数，但这里我们暂时采用与 sRGB 相同的 gamma 以简化，实际应为 PQ 或 HLG。
             :encode (fn [x] (if (<= x 0.0031308) (* 12.92 x) (- (* 1.055 (Math/pow x (/ 1.0 2.4))) 0.055)))}}
 
+   :gray
+   {:white-point d65-white ;; 无实际意义，仅为统一
+    :primaries nil
+    :gamma {:decode identity :encode identity}}
+
    })
 
 (defn get-space
