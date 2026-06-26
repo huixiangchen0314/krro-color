@@ -1,6 +1,6 @@
 (ns top.kzre.krro.color.icc
   "ICC 配置文件解析与转换。支持矩阵型及 LUT 型 (lut16Type, lut8Type) 标签。
-   提供构建颜色转换函数的能力。"
+   提供完整的 A2B / B2A 转换流水线。"
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [top.kzre.krro.color.util :as util]
@@ -34,14 +34,10 @@
     (when (= type-sig 0x63757276) ;; 'curv'
       (let [n (read-u32 buf)]
         (if (zero? n)
-          ;; 零条曲线表示简单 gamma = 1.0
           (fn [x] x)
-          ;; 否则第一条元素可能是 gamma，若为0则表示查找表
           (let [first-val (read-u16 buf)]
             (if (zero? first-val)
-              ;; 查找表：剩余 n-1 个值为表
               (vec (repeatedly (dec n) #(read-u16 buf)))
-              ;; 单 gamma 值
               (double first-val))))))))
 
 ;; ── 解析 lut16Type ─────────────────────────────────────
@@ -54,19 +50,13 @@
             output-channels (read-u8 buf)
             clut-size (read-u8 buf)
             _reserved (read-u8 buf)
-            ;; 矩阵（3x3， 12 个 s15Fixed16）
             matrix (vec (repeatedly 12 #(read-s15Fixed16 buf)))
-            ;; 输入表数量
             input-table-entries (read-u16 buf)
-            ;; 输出表数量
             output-table-entries (read-u16 buf)
-            ;; 输入表（16-bit 量化）
             input-tables (vec (for [c (range input-channels)]
                                 (vec (repeatedly input-table-entries #(read-u16 buf)))))
-            ;; CLUT 值（三维查找表，大小 clut-size^3 * output-channels）
             clut-values (let [n (* clut-size clut-size clut-size output-channels)]
                           (vec (repeatedly n #(read-u16 buf))))
-            ;; 输出表
             output-tables (vec (for [c (range output-channels)]
                                  (vec (repeatedly output-table-entries #(read-u16 buf)))))]
         {:input-channels input-channels
@@ -87,7 +77,6 @@
             output-channels (read-u8 buf)
             clut-size (read-u8 buf)
             _reserved (read-u8 buf)
-            ;; 矩阵（3x3， 12 个 s15Fixed16）
             matrix (vec (repeatedly 12 #(read-s15Fixed16 buf)))
             input-table-entries (read-u16 buf)
             output-table-entries (read-u16 buf)
@@ -105,13 +94,6 @@
          :output-tables output-tables
          :clut-values clut-values}))))
 
-;; ── 解析矩阵 (matrixType) ──────────────────────────────
-(defn- parse-matrix [^ByteBuffer buf offset]
-  (.position buf offset)
-  (let [type-sig (read-u32 buf)]
-    (when (= type-sig 0x6d617474) ;; 'matt'
-      (vec (repeatedly 9 #(read-s15Fixed16 buf))))))
-
 ;; ── 解析 XYZ 标签 ──────────────────────────────────────
 (defn- parse-xyz-tag [^ByteBuffer buf offset]
   (.position buf (+ offset 8))
@@ -119,13 +101,12 @@
 
 ;; ── 主解析函数 ─────────────────────────────────────────
 (defn parse-icc-buffer
-  "从 ByteBuffer 解析 ICC 配置文件，返回一个 map，包含 :header 和可能的 :transform 信息。"
+  "从 ByteBuffer 解析 ICC 配置文件，返回包含所有标签的 map。"
   [^ByteBuffer buf]
   (when (= 0x61637370 (.getInt buf 36)) ;; 'acsp'
     (.order buf ByteOrder/BIG_ENDIAN)
     (let [tag-table-offset (.getInt buf 128)
           tag-table (read-tag-table buf tag-table-offset)]
-      ;; 提取常用标签
       (let [white-point (when-let [tag (get tag-table "wtpt")]
                           (parse-xyz-tag buf (:offset tag)))
             rXYZ (when-let [tag (get tag-table "rXYZ")]
@@ -134,23 +115,18 @@
                    (parse-xyz-tag buf (:offset tag)))
             bXYZ (when-let [tag (get tag-table "bXYZ")]
                    (parse-xyz-tag buf (:offset tag)))
-            ;; 曲线（如果存在）
             rTRC (when-let [tag (get tag-table "rTRC")]
                    (parse-curve buf (:offset tag)))
             gTRC (when-let [tag (get tag-table "gTRC")]
                    (parse-curve buf (:offset tag)))
             bTRC (when-let [tag (get tag-table "bTRC")]
                    (parse-curve buf (:offset tag)))
-            ;; A2B0 标签（LUT 型）
             a2b0 (when-let [tag (get tag-table "A2B0")]
                    (or (parse-lut16 buf (:offset tag))
                        (parse-lut8 buf (:offset tag))))
-            ;; B2A0 标签
             b2a0 (when-let [tag (get tag-table "B2A0")]
                    (or (parse-lut16 buf (:offset tag))
-                       (parse-lut8 buf (:offset tag))))
-            ;; 其他可能的 LUT 标签可类似添加
-            ]
+                       (parse-lut8 buf (:offset tag))))]
         {:white-point white-point
          :rXYZ rXYZ :gXYZ gXYZ :bXYZ bXYZ
          :rTRC rTRC :gTRC gTRC :bTRC bTRC
@@ -158,7 +134,7 @@
          :b2a0 b2a0
          :raw-tags tag-table}))))
 
-;; ── 辅助函数：应用曲线/表到单一通道 ────────────────────
+;; ── 应用曲线/表到单一通道 ────────────────────────────
 (defn- apply-curve [val curve]
   (cond
     (fn? curve) (curve val)
@@ -183,10 +159,10 @@
         b0 (int (Math/floor idx-b)) b1 (min (inc b0) max-idx)
         rd (- idx-r r0) gd (- idx-g g0) bd (- idx-b b0)
         get-val (fn [ri gi bi]
-                  (let [idx (+ ri (* clut-size (+ gi (* clut-size bi))))  ;; 标准 ICC 顺序：r + size*(g + size*b)
+                  (let [idx (+ ri (* clut-size (+ gi (* clut-size bi))))
                         base (* idx output-channels)]
                     (for [c (range output-channels)]
-                      (nth clut-values (+ base c) 0))))
+                      (double (nth clut-values (+ base c) 0)))))
         c000 (get-val r0 g0 b0) c001 (get-val r0 g0 b1)
         c010 (get-val r0 g1 b0) c011 (get-val r0 g1 b1)
         c100 (get-val r1 g0 b0) c101 (get-val r1 g0 b1)
@@ -202,9 +178,9 @@
     result))
 
 ;; ── 应用LUT转换（A2B0或B2A0） ───────────────────────────
-(defn- apply-lut-transform [lut r g b]
+(defn- apply-lut-transform
+  [lut r g b]
   (let [{:keys [input-channels output-channels input-tables output-tables matrix clut-size clut-values]} lut
-        ;; 输入表应用（每个通道）
         apply-input-table (fn [val table]
                             (if (empty? table)
                               val
@@ -227,9 +203,7 @@
                         val
                         (apply-input-table val table))))
                   (range output-channels) clut-result)
-        ;; 应用矩阵（如果有，通常用于转换为PCS）
-        ;; 矩阵为 3x4？ICC 中矩阵类型为 12 个值，前9个为3x3矩阵，后3个为常数项（用于偏移）
-        ;; 简化：仅使用前9个值进行矩阵乘法，忽略偏移
+        ;; 应用矩阵（如果有）
         final (if (and matrix (>= (count matrix) 9))
                 (let [m00 (nth matrix 0) m01 (nth matrix 1) m02 (nth matrix 2)
                       m10 (nth matrix 3) m11 (nth matrix 4) m12 (nth matrix 5)
@@ -243,10 +217,10 @@
 ;; ── 构建 ICC 颜色转换函数 ──────────────────────────────
 (defn make-icc-transform
   "根据解析后的 ICC map 创建一个颜色转换函数。
-   方向：:a2b - 设备（RGB）到 PCS (XYZ 或 LAB)；:b2a - PCS 到设备。"
+   方向：:a2b (设备到 PCS) 或 :b2a (PCS 到设备)。"
   [icc-data direction]
   (cond
-    ;; 矩阵 + 曲线（常见的 RGB 工作空间）
+    ;; 矩阵 + 曲线（常见 RGB 工作空间）
     (and (= direction :a2b) (:rXYZ icc-data) (:rTRC icc-data))
     (let [rXYZ (:rXYZ icc-data) gXYZ (:gXYZ icc-data) bXYZ (:bXYZ icc-data)
           m [[(first rXYZ) (first gXYZ) (first bXYZ)]
@@ -256,7 +230,7 @@
           g-curve (:gTRC icc-data)
           b-curve (:bTRC icc-data)]
       (fn [r g b]
-        (let [r' (apply-curve r r-curve)   ;; 直接调用顶级 apply-curve
+        (let [r' (apply-curve r r-curve)
               g' (apply-curve g g-curve)
               b' (apply-curve b b-curve)
               m00 (get-in m [0 0]) m01 (get-in m [0 1]) m02 (get-in m [0 2])
@@ -265,19 +239,22 @@
           [(+ (* m00 r') (* m01 g') (* m02 b'))
            (+ (* m10 r') (* m11 g') (* m12 b'))
            (+ (* m20 r') (* m21 g') (* m22 b'))])))
-    ;; LUT 型 (A2B0)
+    ;; 矩阵 + 曲线的逆（B2A）暂未实现，但保留占位
+    (and (= direction :b2a) (:rXYZ icc-data) (:rTRC icc-data))
+    (throw (ex-info "B2A matrix+curve not implemented yet" {}))
+    ;; LUT 型 A2B
     (and (= direction :a2b) (:a2b0 icc-data))
     (let [lut (:a2b0 icc-data)]
       (fn [r g b]
         (apply-lut-transform lut r g b)))
-    ;; LUT 型 (B2A0)
+    ;; LUT 型 B2A
     (and (= direction :b2a) (:b2a0 icc-data))
     (let [lut (:b2a0 icc-data)]
       (fn [r g b]
         (apply-lut-transform lut r g b)))
     :else (throw (ex-info "Unsupported ICC transform" {:direction direction}))))
 
-;; ── 内建 sRGB ICC 配置文件数据 ─────────────────────────
+;; ── 内建常用 ICC 数据（基于 profiles）─────────────────
 (def srgb-icc-data
   (let [s (profiles/get-space :srgb)
         gamma-fn (:decode (:gamma s))]
@@ -289,7 +266,6 @@
      :gTRC gamma-fn
      :bTRC gamma-fn}))
 
-;; 同样可定义 adobe-rgb-icc-data, display-p3-icc-data 等
 (def adobe-rgb-icc-data
   (let [s (profiles/get-space :adobe-rgb)
         gamma-fn (:decode (:gamma s))]
