@@ -65,3 +65,15 @@
                      :lab ::lab
                      :xyz ::xyz
                      :gray ::gray))
+
+
+;; ── 颜料规格 ───────────────────────────────────────────
+;; 单个颜料：包含吸收系数 K 和散射系数 S，均为 RGB 三个分量
+(s/def ::k (s/coll-of ::component :kind vector? :count 3))
+(s/def ::s (s/coll-of ::component :kind vector? :count 3))
+(s/def ::pigment
+  (s/keys :req-un [::k ::s]))
+
+;; 颜料库：keyword 到颜料定义的映射
+(s/def ::pigment-library
+  (s/map-of keyword? ::pigment))
