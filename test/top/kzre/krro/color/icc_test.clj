@@ -37,3 +37,10 @@
     ;; 输入 0.5,0.5,0.5 -> 应在 0.5 左右
     (let [mid (transform 0.5 0.5 0.5)]
       (is (every? #(< (Math/abs (- % 0.5)) 0.1) mid)))))
+
+(deftest builtin-icc-profiles
+  (doseq [data [icc/srgb-icc-data icc/adobe-rgb-icc-data icc/display-p3-icc-data]
+          :let [transform (icc/make-icc-transform data :a2b)]]
+    (is transform)
+    (let [result (transform 0.3 0.6 0.9)]
+      (is (every? number? result)))))
