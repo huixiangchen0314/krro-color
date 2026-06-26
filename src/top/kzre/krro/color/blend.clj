@@ -132,6 +132,8 @@
 
 ;; ── 带 alpha 的混合 ──────────────────────────────────────
 (defn blend-with-alpha
+  "对带 alpha 的颜色进行混合。先用 mode 混合颜色（仅对 RGB），
+   然后应用 Porter-Duff over 合成。"
   [backdrop source mode]
   (let [blended-rgb (blend (subvec backdrop 0 3) (subvec source 0 3) mode)
         blended-rgba (conj (vec blended-rgb) (rgb/alpha source))]
