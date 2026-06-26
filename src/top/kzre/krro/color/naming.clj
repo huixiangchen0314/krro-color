@@ -1,7 +1,8 @@
 (ns top.kzre.krro.color.naming
   "颜色名称解析：W3C CSS 颜色名。"
-  (:require [top.kzre.krro.color.distance :as dist]
-            [top.kzre.krro.color.rgb :as rgb]))
+  (:require
+   [clojure.string :as str]
+   [top.kzre.krro.color.distance :as dist]))
 
 ;; 内置 W3C 颜色表（子集，完整版可扩展）
 (def ^:private named-colors
