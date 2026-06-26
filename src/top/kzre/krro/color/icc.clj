@@ -5,6 +5,8 @@
             [top.kzre.krro.color.profiles :as profiles])
   (:import (java.io ByteArrayOutputStream InputStream)
            (java.nio ByteBuffer ByteOrder)))
+;; TODO 输入/输出表的应用以及矩阵处理
+
 
 ;; ── 基础读取（ByteBuffer） ─────────────────────────────
 (defn- read-u8 [^ByteBuffer buf] (Byte/toUnsignedInt (.get buf)))
