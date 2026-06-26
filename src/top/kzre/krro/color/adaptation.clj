@@ -1,7 +1,6 @@
 (ns top.kzre.krro.color.adaptation
   "色适应变换：在不同参考白点之间转换 XYZ 颜色。
-   使用 Bradford 变换矩阵。"
-  (:require [top.kzre.krro.color.util :as util]))
+   使用 Bradford 变换矩阵。")
 
 ;; Bradford 变换矩阵 (XYZ -> cone response)
 (def ^:private bradford-matrix
