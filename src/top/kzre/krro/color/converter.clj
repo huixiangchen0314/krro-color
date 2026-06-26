@@ -98,8 +98,10 @@
     (profiles/matrix-mult primaries linear)))
 
 (defn- xyz->rgb-using [xyz-vec space-kw]
-  (let [{:keys [primaries gamma]} (profiles/get-space space-kw)
-        linear (profiles/matrix-mult (profiles/matrix-inv primaries) xyz-vec)]
+  (let [{:keys [primaries-inv gamma]} (profiles/get-space space-kw)
+        linear (profiles/matrix-mult primaries-inv xyz-vec)
+        ;; 钳制微小负值
+        linear (mapv #(max 0.0 %) linear)]
     (mapv (:encode gamma) linear)))
 
 ;; sRGB
@@ -140,6 +142,13 @@
 (defn rgb->oklch [c] (-> c rgb->oklab oklch/oklab->oklch))
 (defn oklch->rgb [c] (-> c oklch/oklch->oklab oklab->rgb))
 
+
+(defn xyz->lab [c] (lab/xyz->lab c))
+(defn lab->xyz [c] (lab/lab->xyz c))
+
+
+
+
 ;; ── 颜色距离便捷函数 ─────────────────────────────────
 (defn delta-e76-rgb [c1 c2]
   (dist/delta-e76 (rgb->lab c1) (rgb->lab c2)))
@@ -149,3 +158,4 @@
   (dist/delta-e2000 (rgb->lab c1) (rgb->lab c2)))
 (defn contrast-ratio-rgb [c1 c2]
   (dist/contrast-ratio c1 c2))
+

@@ -23,11 +23,9 @@
   "获取黑色分量。"
   [c] (nth c 3))
 
-(defn rgb->cmyk
-  "将 sRGB 颜色转换为 CMYK。"
-  [[r g b]]
+(defn rgb->cmyk [[r g b]]
   (let [k (- 1 (max r g b))]
-    (if (= k 1.0)
+    (if (>= k 0.9999)
       [0.0 0.0 0.0 1.0]
       (let [c (/ (- 1 r k) (- 1 k))
             m (/ (- 1 g k) (- 1 k))
